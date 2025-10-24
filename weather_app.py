@@ -207,25 +207,108 @@ def set_background(weather_main):
             background-position: center;
         }}
         
-        /* 텍스트 가독성을 위한 반투명 오버레이 */
+        /* 전체 앱 컨테이너에 강한 반투명 배경 */
         .stApp > div:first-child {{
-            background-color: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(5px);
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            backdrop-filter: blur(10px);
+            min-height: 100vh;
+        }}
+        
+        /* 메인 컨테이너 배경 강화 */
+        .main .block-container {{
+            background-color: rgba(255, 255, 255, 0.98) !important;
+            padding: 2rem 1rem;
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            backdrop-filter: blur(15px);
         }}
         
         /* 메트릭 카드 스타일 개선 */
         div[data-testid="metric-container"] {{
-            background-color: rgba(255, 255, 255, 0.9);
-            border: 1px solid rgba(200, 200, 200, 0.3);
-            padding: 10px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            border: 2px solid rgba(200, 200, 200, 0.5);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+        }}
+        
+        /* 메트릭 텍스트 강화 */
+        div[data-testid="metric-container"] * {{
+            color: #333333 !important;
+            font-weight: 600 !important;
         }}
         
         /* 확장 가능한 섹션 스타일 */
         div[data-testid="stExpander"] {{
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            border-radius: 12px;
+            border: 1px solid rgba(200, 200, 200, 0.5);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }}
+        
+        /* 탭 스타일 개선 */
+        .stTabs [data-baseweb="tab-list"] {{
             background-color: rgba(255, 255, 255, 0.9);
             border-radius: 10px;
+            padding: 5px;
+        }}
+        
+        .stTabs [data-baseweb="tab"] {{
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 8px;
+            margin: 2px;
+        }}
+        
+        /* 버튼 스타일 개선 */
+        .stButton > button {{
+            background-color: rgba(255, 255, 255, 0.9) !important;
+            color: #333333 !important;
+            border: 2px solid rgba(103, 126, 234, 0.8) !important;
+            font-weight: 600 !important;
+        }}
+        
+        .stButton > button:hover {{
+            background-color: rgba(103, 126, 234, 0.9) !important;
+            color: white !important;
+        }}
+        
+        /* 입력 필드 스타일 개선 */
+        .stTextInput > div > div > input {{
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            color: #333333 !important;
+            border: 2px solid rgba(200, 200, 200, 0.7) !important;
+        }}
+        
+        /* 숫자 입력 필드 스타일 개선 */
+        .stNumberInput > div > div > input {{
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            color: #333333 !important;
+            border: 2px solid rgba(200, 200, 200, 0.7) !important;
+        }}
+        
+        /* 데이터프레임 스타일 개선 */
+        .stDataFrame {{
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            border-radius: 10px;
+            overflow: hidden;
+        }}
+        
+        /* 차트 배경 개선 */
+        .stPlotlyChart {{
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            border-radius: 10px;
+            padding: 10px;
+        }}
+        
+        /* 일반 텍스트 가독성 향상 */
+        .stMarkdown, .stText, p, div {{
+            color: #333333 !important;
+        }}
+        
+        /* 제목 스타일 강화 */
+        h1, h2, h3, h4, h5, h6 {{
+            color: #2c3e50 !important;
+            text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
         }}
         </style>
         """,
