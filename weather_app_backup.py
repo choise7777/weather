@@ -339,6 +339,50 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def get_weather_data(city_name, country_code=None):
+    """현재 날씨 정보를 가져오는 함수"""
+    if country_code:
+        query = f"{city_name},{country_code}"
+    else:
+        query = city_name
+    
+    params = {
+        'q': query,
+        'appid': API_KEY,
+        'units': 'metric',  # 섭씨 온도
+        'lang': 'kr'  # 한국어
+    }
+    
+    try:
+        response = requests.get(BASE_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"날씨 데이터를 가져오는데 실패했습니다: {e}")
+        return None
+
+def get_forecast_data(city_name, country_code=None):
+    """5일 날씨 예보를 가져오는 함수"""
+    if country_code:
+        query = f"{city_name},{country_code}"
+    else:
+        query = city_name
+    
+    params = {
+        'q': query,
+        'appid': API_KEY,
+        'units': 'metric',
+        'lang': 'kr'
+    }
+    
+    try:
+        response = requests.get(FORECAST_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"예보 데이터를 가져오는데 실패했습니다: {e}")
+        return None
+
 def get_weather_by_coordinates(lat, lon):
     """위도/경도로 현재 날씨 가져오기"""
     params = {
@@ -455,6 +499,54 @@ def display_current_weather(weather_data):
     </div>
     """, unsafe_allow_html=True)
 
+def display_city_weather(search_btn, city_input):
+    """도시 검색 결과 표시"""
+    if search_btn and city_input:
+        with st.spinner("날씨 정보 로딩중..."):
+            weather_data = get_weather_data(city_input)
+            
+            if weather_data:
+                # 날씨에 따른 동적 배경화면 설정
+                set_background(weather_data['weather'][0]['main'])
+                
+                # 기본 정보
+                st.success(f"📍 {weather_data['name']}, {weather_data['sys']['country']}")
+                
+                # 현재 날씨 표시
+                st.subheader("🌡️ 현재 날씨")
+                display_current_weather(weather_data)
+                
+                # 상세 정보
+                with st.expander("📊 상세 정보 보기"):
+                    detail_col1, detail_col2 = st.columns(2)
+                    
+                    with detail_col1:
+                        st.write(f"**체감온도:** {weather_data['main']['feels_like']:.1f}°C")
+                        st.write(f"**최고온도:** {weather_data['main']['temp_max']:.1f}°C")
+                        st.write(f"**최저온도:** {weather_data['main']['temp_min']:.1f}°C")
+                        st.write(f"**기압:** {weather_data['main']['pressure']} hPa")
+                    
+                    with detail_col2:
+                        st.write(f"**구름량:** {weather_data['clouds']['all']}%")
+                        st.write(f"**가시거리:** {weather_data.get('visibility', 0)/1000:.1f} km")
+                        
+                        # 일출/일몰
+                        sunrise = datetime.fromtimestamp(weather_data['sys']['sunrise'])
+                        sunset = datetime.fromtimestamp(weather_data['sys']['sunset'])
+                        st.write(f"**일출:** {sunrise.strftime('%H:%M')}")
+                        st.write(f"**일몰:** {sunset.strftime('%H:%M')}")
+                
+                # 예보 그래프 (간단하게)
+                forecast_data = get_forecast_data(city_input)
+                if forecast_data:
+                    display_forecast(forecast_data)
+            
+            else:
+                st.error("❌ 날씨 정보를 가져올 수 없습니다. 도시명을 확인해주세요.")
+    
+    elif not search_btn:
+        st.info("👆 위에서 도시명을 입력하거나 인기 도시 버튼을 클릭하세요!")
+
 def display_location_weather():
     """현재 위치 기반 날씨 표시"""
     st.markdown("### 📍 현재 위치 기반 날씨")
@@ -473,6 +565,23 @@ def display_location_weather():
     
     with col3:
         location_search = st.button("🎯 현재 위치 날씨", type="primary")
+    
+    # 위치 기반 날씨 결과 표시
+    
+    with world_col1:
+        if st.button("�🇯🇵 도쿄", key="coord_tokyo"):
+            latitude, longitude = 35.6762, 139.6503
+            location_search = True
+    
+    with world_col2:
+        if st.button("🇺🇸 뉴욕", key="coord_newyork"):
+            latitude, longitude = 40.7128, -74.0060
+            location_search = True
+    
+    with world_col3:
+        if st.button("🇬🇧 런던", key="coord_london"):
+            latitude, longitude = 51.5074, -0.1278
+            location_search = True
     
     # 위치 기반 날씨 결과 표시
     if location_search:
@@ -839,8 +948,112 @@ def main():
     # 제목
     st.title("🌤️ 실시간 날씨")
     
-    # 현재 위치 기반 날씨만 표시
-    display_location_weather()
+    # 탭 생성
+    tab1, tab2 = st.tabs(["🔍 도시 검색", "📍 내 위치"])
+    
+    with tab1:
+        # 도시 입력
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            city_input = st.text_input("도시명", placeholder="도시명을 입력하세요 (예: Seoul, Tokyo, London)", label_visibility="collapsed")
+        
+        with col2:
+            search_btn = st.button("🔍 검색", type="primary")
+        
+        # 한국 주요 도시 버튼들
+        st.markdown("**🇰🇷 한국 주요 도시:**")
+        korea_col1, korea_col2, korea_col3, korea_col4 = st.columns(4)
+        
+        with korea_col1:
+            if st.button("�️ 서울", key="seoul"):
+                city_input = "Seoul"
+                search_btn = True
+        with korea_col2:
+            if st.button("✈️ 김포", key="kimpo"):
+                city_input = "Gimpo"
+                search_btn = True
+        with korea_col3:
+            if st.button("🌊 부산", key="busan"):
+                city_input = "Busan"
+                search_btn = True
+        with korea_col4:
+            if st.button("� 제주", key="jeju"):
+                city_input = "Jeju"
+                search_btn = True
+        
+        # 해외 주요 도시 버튼들
+        st.markdown("**🌍 해외 주요 도시:**")
+        world_col1, world_col2, world_col3, world_col4 = st.columns(4)
+        
+        with world_col1:
+            if st.button("🇯🇵 도쿄", key="tokyo"):
+                city_input = "Tokyo"
+                search_btn = True
+        with world_col2:
+            if st.button("🇺🇸 뉴욕", key="newyork"):
+                city_input = "New York"
+                search_btn = True
+        with world_col3:
+            if st.button("🇬🇧 런던", key="london"):
+                city_input = "London"
+                search_btn = True
+        with world_col4:
+            if st.button("🇫🇷 파리", key="paris"):
+                city_input = "Paris"
+                search_btn = True
+        
+        # 도시 검색 결과 표시
+        display_city_weather(search_btn, city_input)
+    
+    with tab2:
+        # 현재 위치 기반 날씨
+        display_location_weather()
+    
+    # 날씨 정보 표시
+    if search_btn and city_input:
+        with st.spinner("날씨 정보 로딩중..."):
+            weather_data = get_weather_data(city_input)
+            
+            if weather_data:
+                # 기본 정보
+                st.success(f"📍 {weather_data['name']}, {weather_data['sys']['country']}")
+                
+                # 현재 날씨 표시
+                st.subheader("🌡️ 현재 날씨")
+                display_current_weather(weather_data)
+                
+                # 상세 정보
+                with st.expander("📊 상세 정보 보기"):
+                    detail_col1, detail_col2 = st.columns(2)
+                    
+                    with detail_col1:
+                        st.write(f"**체감온도:** {weather_data['main']['feels_like']:.1f}°C")
+                        st.write(f"**최고온도:** {weather_data['main']['temp_max']:.1f}°C")
+                        st.write(f"**최저온도:** {weather_data['main']['temp_min']:.1f}°C")
+                        st.write(f"**기압:** {weather_data['main']['pressure']} hPa")
+                    
+                    with detail_col2:
+                        st.write(f"**구름량:** {weather_data['clouds']['all']}%")
+                        st.write(f"**가시거리:** {weather_data.get('visibility', 0)/1000:.1f} km")
+                        
+                        # 일출/일몰
+                        sunrise = datetime.fromtimestamp(weather_data['sys']['sunrise'])
+                        sunset = datetime.fromtimestamp(weather_data['sys']['sunset'])
+                        st.write(f"**일출:** {sunrise.strftime('%H:%M')}")
+                        st.write(f"**일몰:** {sunset.strftime('%H:%M')}")
+                
+                # 예보 그래프
+                forecast_data = get_forecast_data(city_input)
+                if forecast_data:
+                    display_forecast(forecast_data)
+            
+            else:
+                st.error("❌ 날씨 정보를 가져올 수 없습니다. 도시명을 확인해주세요.")
+    
+    # 초기 화면
+    elif not city_input:
+        st.info("👆 위에서 도시명을 입력하거나 인기 도시 버튼을 클릭하세요!")
 
 if __name__ == "__main__":
     main()
