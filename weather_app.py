@@ -1,0 +1,1025 @@
+import streamlit as st
+import requests
+import json
+from datetime import datetime
+import pandas as pd
+import os
+from pathlib import Path
+
+# API 키 보안 로딩
+try:
+    # 먼저 .env 파일에서 환경변수 로딩 시도
+    from dotenv import load_dotenv
+    load_dotenv()
+    API_KEY = os.getenv('OPENWEATHER_API_KEY')
+    
+    # .env 파일이 없으면 config.py에서 로딩
+    if not API_KEY:
+        from config import OPENWEATHER_API_KEY
+        API_KEY = OPENWEATHER_API_KEY
+except (ImportError, ModuleNotFoundError):
+    try:
+        # config.py에서 직접 로딩
+        from config import OPENWEATHER_API_KEY
+        API_KEY = OPENWEATHER_API_KEY
+    except (ImportError, ModuleNotFoundError):
+        # 마지막 수단으로 하드코딩된 키 사용 (개발용)
+        API_KEY = "14e3fc348b3e11a20c23806f1c3be844"
+        st.warning("⚠️ API 키가 보안 파일에서 로딩되지 않았습니다. config.py 파일을 확인하세요.")
+
+def get_detailed_address(latitude, longitude):
+    """Nominatim API를 사용해 좌표로부터 상세 주소 정보 획득"""
+    try:
+        # Nominatim API (OpenStreetMap의 무료 지오코딩 서비스)
+        nominatim_url = f"https://nominatim.openstreetmap.org/reverse"
+        params = {
+            'lat': latitude,
+            'lon': longitude,
+            'format': 'json',
+            'accept-language': 'ko,en',  # 한국어 우선, 영어 fallback
+            'zoom': 18  # 상세한 주소 정보 요청
+        }
+        
+        headers = {
+            'User-Agent': 'WeatherApp/1.0 (contact@example.com)'  # Nominatim 정책상 필수
+        }
+        
+        response = requests.get(nominatim_url, params=params, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # 주소 정보 파싱
+            address = data.get('address', {})
+            display_name = data.get('display_name', '')
+            
+            # 한국 주소 체계에 맞게 정보 추출
+            location_info = {
+                'country': address.get('country', ''),
+                'state': address.get('state', ''),  # 시/도
+                'city': address.get('city', '') or address.get('county', ''),  # 시/군
+                'district': address.get('district', '') or address.get('borough', ''),  # 구
+                'neighbourhood': address.get('neighbourhood', '') or address.get('suburb', ''),  # 동/면
+                'road': address.get('road', ''),  # 도로명
+                'house_number': address.get('house_number', ''),
+                'full_address': display_name
+            }
+            
+            # 한국어 주소 포맷팅
+            formatted_parts = []
+            
+            if location_info['country']:
+                formatted_parts.append(location_info['country'])
+            if location_info['state']:
+                formatted_parts.append(location_info['state'])
+            if location_info['city']:
+                formatted_parts.append(location_info['city'])
+            if location_info['district']:
+                formatted_parts.append(location_info['district'])
+            if location_info['neighbourhood']:
+                formatted_parts.append(location_info['neighbourhood'])
+                
+            location_info['formatted_address'] = ' '.join(formatted_parts)
+            
+            return location_info
+            
+    except Exception as e:
+        print(f"Nominatim API 오류: {e}")
+        return None
+    
+    return None
+
+def get_ootd_recommendation(feels_like, weather_main):
+    """
+    체감 온도와 날씨 상태에 따라 옷차림을 추천하는 함수 (데이터 처리)
+    'level'을 추가하여 기온 단계를 비교할 수 있게 함
+    """
+    
+    if feels_like > 27:
+        rec = {
+            "level": 8,  # 덥다
+            "summary": "🥵 매우 더움",
+            "items": "민소매, 반팔, 반바지, 린넨, 원피스",
+            "image_path": "images/ootd_hot.png"
+        }
+    elif 23 <= feels_like <= 27:
+        rec = {
+            "level": 7,
+            "summary": "😎 더움",
+            "items": "반팔, 얇은 셔츠, 반바지, 면바지",
+            "image_path": "images/ootd_warm.png"
+        }
+    elif 20 <= feels_like <= 22:
+        rec = {
+            "level": 6,
+            "summary": "🙂 쾌적함",
+            "items": "얇은 가디건, 긴팔 셔츠, 면바지, 청바지",
+            "image_path": "images/ootd_mild.png"
+        }
+    elif 17 <= feels_like <= 19:
+        rec = {
+            "level": 5,
+            "summary": "👍 선선함",
+            "items": "맨투맨, 후드티, 얇은 니트, 청바지",
+            "image_path": "images/ootd_cool.png"
+        }
+    elif 12 <= feels_like <= 16:
+        rec = {
+            "level": 4,
+            "summary": "🧥 쌀쌀함",
+            "items": "자켓, 가디건, 니트, 스타킹, 기모 바지",
+            "image_path": "images/ootd_chilly.png"
+        }
+    elif 9 <= feels_like <= 11:
+        rec = {
+            "level": 3,
+            "summary": "🥶 추움",
+            "items": "트렌치 코트, 야상, 니트, 히트텍",
+            "image_path": "images/ootd_cold.png"
+        }
+    elif 5 <= feels_like <= 8:
+        rec = {
+            "level": 2,
+            "summary": "❄️ 매우 추움",
+            "items": "울 코트, 가죽 자켓, 목도리, 기모",
+            "image_path": "images/ootd_very_cold.png"
+        }
+    else:  # 5도 미만
+        rec = {
+            "level": 1,
+            "summary": "🥶🥶 한파",
+            "items": "패딩, 두꺼운 코트, 내복, 목도리, 장갑",
+            "image_path": "images/ootd_freezing.png"
+        }
+
+    # 날씨별 액세서리 추천
+    accessory_rec = ""
+    if weather_main == "Rain":
+        accessory_rec = "☔ 우산을 꼭 챙기세요! 방수 신발도 좋습니다."
+    elif weather_main == "Snow":
+        accessory_rec = "❄️ 미끄럼 방지 신발과 장갑을 준비하세요."
+    elif weather_main == "Thunderstorm":
+        accessory_rec = "⚡ 우산과 방수 외투를 챙기세요."
+    elif weather_main == "Drizzle":
+        accessory_rec = "🌦️ 가벼운 우산이나 후드를 준비하세요."
+    elif weather_main == "Mist" or weather_main == "Fog":
+        accessory_rec = "🌫️ 시야 확보를 위해 밝은 색 옷을 권합니다."
+    elif weather_main == "Clear" and feels_like > 25:
+        accessory_rec = "🕶️ 선글라스와 자외선 차단제를 준비하세요."
+    elif weather_main == "Clouds" and feels_like < 15:
+        accessory_rec = "☁️ 체온 유지를 위해 목도리를 챙기세요."
+    
+    return rec, accessory_rec
+
+def set_background(weather_main):
+    """날씨 상태에 따라 동적 배경화면 설정"""
+    # 날씨 상태에 따라 다른 이미지 URL을 매핑
+    if weather_main == "Clear":
+        bg_url = "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2070&q=80"  # 맑은 하늘
+    elif weather_main == "Rain":
+        bg_url = "https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2127&q=80"  # 비 오는 창문
+    elif weather_main == "Snow":
+        bg_url = "https://images.unsplash.com/photo-1548777123-93d6ac74e765?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2070&q=80"  # 눈 내리는 풍경
+    elif weather_main == "Clouds":
+        bg_url = "https://images.unsplash.com/photo-1534088568595-a066f410bcda?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2051&q=80"  # 흐린 하늘
+    elif weather_main == "Thunderstorm":
+        bg_url = "https://images.unsplash.com/photo-1605727216801-e27ce1d0cc28?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2071&q=80"  # 번개/천둥
+    elif weather_main == "Drizzle":
+        bg_url = "https://images.unsplash.com/photo-1541919329513-35f7af297129?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2070&q=80"  # 이슬비
+    elif weather_main == "Mist" or weather_main == "Fog":
+        bg_url = "https://images.unsplash.com/photo-1487621167305-5d248087c724?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2132&q=80"  # 안개 낀 풍경
+    else:
+        bg_url = "https://images.unsplash.com/photo-1504608524841-42fe6f032b4b?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2070&q=80"  # 기본 하늘 이미지
+
+    # CSS를 HTML로 주입
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image: url("{bg_url}");
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+            background-position: center;
+        }}
+        
+        /* 텍스트 가독성을 위한 반투명 오버레이 */
+        .stApp > div:first-child {{
+            background-color: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(5px);
+        }}
+        
+        /* 메트릭 카드 스타일 개선 */
+        div[data-testid="metric-container"] {{
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(200, 200, 200, 0.3);
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }}
+        
+        /* 확장 가능한 섹션 스타일 */
+        div[data-testid="stExpander"] {{
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 10px;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+# OpenWeather API 설정
+BASE_URL = "http://api.openweathermap.org/data/2.5/weather"
+FORECAST_URL = "http://api.openweathermap.org/data/2.5/forecast"
+
+# 페이지 설정 - 전 버전 디자인으로 롤백
+st.set_page_config(
+    page_title="🌤️ 실시간 날씨",
+    page_icon="🌤️",
+    layout="centered",  # wide에서 centered로 변경
+    initial_sidebar_state="auto"
+)
+
+# CSS로 불필요한 요소 숨기기
+st.markdown("""
+<style>
+    .stDeployButton {display:none;}
+    footer {visibility: hidden;}
+    .stDecoration {display:none;}
+    header {visibility: hidden;}
+    .css-1rs6os {display:none;}
+    .css-17eq0hr {display:none;}
+</style>
+""", unsafe_allow_html=True)
+
+def get_weather_data(city_name, country_code=None):
+    """현재 날씨 정보를 가져오는 함수"""
+    if country_code:
+        query = f"{city_name},{country_code}"
+    else:
+        query = city_name
+    
+    params = {
+        'q': query,
+        'appid': API_KEY,
+        'units': 'metric',  # 섭씨 온도
+        'lang': 'kr'  # 한국어
+    }
+    
+    try:
+        response = requests.get(BASE_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"날씨 데이터를 가져오는데 실패했습니다: {e}")
+        return None
+
+def get_forecast_data(city_name, country_code=None):
+    """5일 날씨 예보를 가져오는 함수"""
+    if country_code:
+        query = f"{city_name},{country_code}"
+    else:
+        query = city_name
+    
+    params = {
+        'q': query,
+        'appid': API_KEY,
+        'units': 'metric',
+        'lang': 'kr'
+    }
+    
+    try:
+        response = requests.get(FORECAST_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"예보 데이터를 가져오는데 실패했습니다: {e}")
+        return None
+
+def get_weather_by_coordinates(lat, lon):
+    """위도/경도로 현재 날씨 가져오기"""
+    params = {
+        'lat': lat,
+        'lon': lon,
+        'appid': API_KEY,
+        'units': 'metric',
+        'lang': 'kr'
+    }
+    
+    try:
+        response = requests.get(BASE_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"위치 기반 날씨 데이터를 가져오는데 실패했습니다: {e}")
+        return None
+
+def get_forecast_by_coordinates(lat, lon):
+    """위도/경도로 예보 데이터 가져오기"""
+    params = {
+        'lat': lat,
+        'lon': lon,
+        'appid': API_KEY,
+        'units': 'metric',
+        'lang': 'kr'
+    }
+    
+    try:
+        response = requests.get(FORECAST_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"위치 기반 예보 데이터를 가져오는데 실패했습니다: {e}")
+        return None
+
+def process_weekly_forecast(forecast_data):
+    """주간 예보 데이터 처리"""
+    if not forecast_data or 'list' not in forecast_data:
+        return []
+    
+    weekly_data = []
+    daily_data = {}
+    
+    # 5일 예보를 일별로 그룹화
+    for item in forecast_data['list']:
+        date = datetime.fromtimestamp(item['dt'])
+        date_key = date.strftime('%Y-%m-%d')
+        
+        if date_key not in daily_data:
+            daily_data[date_key] = {
+                'temps': [],
+                'humidity': [],
+                'weather': item['weather'][0]['description'],
+                'pop': item.get('pop', 0),
+                'date': date,
+                'wind_speeds': []
+            }
+        
+        daily_data[date_key]['temps'].append(item['main']['temp'])
+        daily_data[date_key]['humidity'].append(item['main']['humidity'])
+        daily_data[date_key]['wind_speeds'].append(item['wind'].get('speed', 0))
+    
+    # 일별 데이터를 정리하여 주간 데이터 생성
+    for date_key, data in list(daily_data.items())[:7]:  # 최대 7일
+        weekly_data.append({
+            '날짜': data['date'].strftime('%m/%d (%a)'),
+            '날씨': data['weather'],
+            '최고온도': f"{max(data['temps']):.0f}°C",
+            '최저온도': f"{min(data['temps']):.0f}°C",
+            '평균습도': f"{sum(data['humidity'])//len(data['humidity'])}%",
+            '평균풍속': f"{sum(data['wind_speeds'])/len(data['wind_speeds']):.1f} m/s",
+            '강수확률': f"{data['pop']*100:.0f}%"
+        })
+    
+    return weekly_data
+
+def display_current_weather(weather_data):
+    """현재 날씨 정보 표시"""
+    # 날씨 정보를 3개 컬럼으로 표시
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        temp = weather_data['main']['temp']
+        st.metric(
+            label="🌡️ 온도", 
+            value=f"{temp:.1f}°C",
+            delta=f"체감 {weather_data['main']['feels_like']:.1f}°C"
+        )
+    
+    with col2:
+        humidity = weather_data['main']['humidity']
+        st.metric(
+            label="💧 습도", 
+            value=f"{humidity}%"
+        )
+    
+    with col3:
+        wind_speed = weather_data['wind']['speed']
+        st.metric(
+            label="💨 풍속", 
+            value=f"{wind_speed:.1f} m/s"
+        )
+    
+    # 날씨 상태
+    weather_desc = weather_data['weather'][0]['description']
+    weather_icon = weather_data['weather'][0]['icon']
+    
+    st.markdown(f"""
+    <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+         border-radius: 10px; color: white; margin: 20px 0;">
+        <h3>☁️ {weather_desc.title()}</h3>
+        <p style="font-size: 18px; margin: 0;">현재 날씨 상태</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def display_city_weather(search_btn, city_input):
+    """도시 검색 결과 표시"""
+    if search_btn and city_input:
+        with st.spinner("날씨 정보 로딩중..."):
+            weather_data = get_weather_data(city_input)
+            
+            if weather_data:
+                # 날씨에 따른 동적 배경화면 설정
+                set_background(weather_data['weather'][0]['main'])
+                
+                # 기본 정보
+                st.success(f"📍 {weather_data['name']}, {weather_data['sys']['country']}")
+                
+                # 현재 날씨 표시
+                st.subheader("🌡️ 현재 날씨")
+                display_current_weather(weather_data)
+                
+                # 상세 정보
+                with st.expander("📊 상세 정보 보기"):
+                    detail_col1, detail_col2 = st.columns(2)
+                    
+                    with detail_col1:
+                        st.write(f"**체감온도:** {weather_data['main']['feels_like']:.1f}°C")
+                        st.write(f"**최고온도:** {weather_data['main']['temp_max']:.1f}°C")
+                        st.write(f"**최저온도:** {weather_data['main']['temp_min']:.1f}°C")
+                        st.write(f"**기압:** {weather_data['main']['pressure']} hPa")
+                    
+                    with detail_col2:
+                        st.write(f"**구름량:** {weather_data['clouds']['all']}%")
+                        st.write(f"**가시거리:** {weather_data.get('visibility', 0)/1000:.1f} km")
+                        
+                        # 일출/일몰
+                        sunrise = datetime.fromtimestamp(weather_data['sys']['sunrise'])
+                        sunset = datetime.fromtimestamp(weather_data['sys']['sunset'])
+                        st.write(f"**일출:** {sunrise.strftime('%H:%M')}")
+                        st.write(f"**일몰:** {sunset.strftime('%H:%M')}")
+                
+                # 예보 그래프 (간단하게)
+                forecast_data = get_forecast_data(city_input)
+                if forecast_data:
+                    display_forecast(forecast_data)
+            
+            else:
+                st.error("❌ 날씨 정보를 가져올 수 없습니다. 도시명을 확인해주세요.")
+    
+    elif not search_btn:
+        st.info("👆 위에서 도시명을 입력하거나 인기 도시 버튼을 클릭하세요!")
+        
+        # 사용법 안내
+        st.markdown("""
+        ### 📖 사용법
+        1. 상단 입력창에 **도시명** 입력 (영어)
+        2. **🔍 검색** 버튼 클릭
+        3. 또는 **인기 도시 버튼** 클릭
+        4. **실시간 날씨 정보** 및 **2일간 온도 그래프** 확인! 🌤️
+        
+        **지원 도시:** 전 세계 대부분의 주요 도시 🌍
+        """)
+
+def display_location_weather():
+    """현재 위치 기반 날씨 표시"""
+    st.markdown("### 📍 현재 위치 기반 날씨")
+    
+    # 위치 입력 방법 안내
+    st.info("💡 브라우저에서 위치 권한을 허용하거나, 아래에 좌표를 직접 입력하세요.")
+    
+    # 좌표 입력
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        latitude = st.number_input("위도 (Latitude)", value=37.6199671, format="%.6f", help="김포 사우동: 37.6199671")
+    
+    with col2:
+        longitude = st.number_input("경도 (Longitude)", value=126.726365, format="%.6f", help="김포 사우동: 126.726365")
+    
+    with col3:
+        location_search = st.button("🎯 현재 위치 날씨", type="primary")
+    
+    # 좌표 예시 (간단하게)
+    st.markdown("**📍 빠른 좌표 설정:**")
+    quick_col1, quick_col2, quick_col3 = st.columns(3)
+    
+    with quick_col1:
+        if st.button("🏠 김포 사우동", key="coord_kimpo"):
+            latitude, longitude = 37.6199671, 126.726365
+            location_search = True
+    
+    with quick_col2:
+        if st.button("🏢 서울 중심", key="coord_seoul"):
+            latitude, longitude = 37.5665, 126.9780
+            location_search = True
+    
+    with quick_col3:
+        if st.button("🌊 부산 해운대", key="coord_busan"):
+            latitude, longitude = 35.1796, 129.0756
+            location_search = True
+    
+
+    
+
+    world_col1, world_col2, world_col3, world_col4 = st.columns(4)
+    
+    with world_col1:
+        if st.button("�🇯🇵 도쿄", key="coord_tokyo"):
+            latitude, longitude = 35.6762, 139.6503
+            location_search = True
+    
+    with world_col2:
+        if st.button("🇺🇸 뉴욕", key="coord_newyork"):
+            latitude, longitude = 40.7128, -74.0060
+            location_search = True
+    
+    with world_col3:
+        if st.button("🇬🇧 런던", key="coord_london"):
+            latitude, longitude = 51.5074, -0.1278
+            location_search = True
+    
+    with world_col4:
+        if st.button("🇫🇷 파리", key="coord_paris"):
+            latitude, longitude = 48.8566, 2.3522
+            location_search = True
+    
+    # 위치 기반 날씨 결과 표시
+    if location_search:
+        with st.spinner("현재 위치의 날씨 정보를 가져오는 중..."):
+            weather_data = get_weather_by_coordinates(latitude, longitude)
+            
+            if weather_data:
+                # 날씨에 따른 동적 배경화면 설정
+                set_background(weather_data['weather'][0]['main'])
+                
+                # 상세 주소 정보 획득
+                detailed_address = get_detailed_address(latitude, longitude)
+                
+                # 위치 정보 표시
+                if detailed_address and detailed_address['formatted_address']:
+                    location_display = f"📍 **상세 위치:** {detailed_address['formatted_address']}"
+                    weather_location = f"**날씨 기준:** {weather_data['name']}, {weather_data['sys']['country']}"
+                    st.success(location_display)
+                    st.info(f"🌤️ {weather_location} | 📐 위도: {latitude:.4f}, 경도: {longitude:.4f}")
+                    
+                    # 상세 주소 정보를 확장 가능한 섹션으로 표시
+                    with st.expander("🗺️ 상세 위치 정보 보기"):
+                        addr_col1, addr_col2 = st.columns(2)
+                        
+                        with addr_col1:
+                            if detailed_address['country']:
+                                st.write(f"**🌍 국가:** {detailed_address['country']}")
+                            if detailed_address['state']:
+                                st.write(f"**🏛️ 시/도:** {detailed_address['state']}")
+                            if detailed_address['city']:
+                                st.write(f"**🏙️ 시/군:** {detailed_address['city']}")
+                        
+                        with addr_col2:
+                            if detailed_address['district']:
+                                st.write(f"**🏘️ 구:** {detailed_address['district']}")
+                            if detailed_address['neighbourhood']:
+                                st.write(f"**🏠 동/면:** {detailed_address['neighbourhood']}")
+                            if detailed_address['road']:
+                                st.write(f"**🛣️ 도로:** {detailed_address['road']}")
+                
+                else:
+                    # Nominatim API 실패 시 기본 정보 표시
+                    st.success(f"📍 {weather_data['name']}, {weather_data['sys']['country']}")
+                    st.info(f"📐 위도: {latitude:.4f}, 경도: {longitude:.4f}")
+                    st.warning("⚠️ 상세 주소 정보를 가져올 수 없어 날씨 기준 위치를 표시합니다.")
+                
+                st.subheader("🌡️ 현재 날씨")
+                display_current_weather(weather_data)
+                
+                # 상세 정보
+                with st.expander("📊 상세 정보 보기"):
+                    detail_col1, detail_col2 = st.columns(2)
+                    
+                    with detail_col1:
+                        st.write(f"**체감온도:** {weather_data['main']['feels_like']:.1f}°C")
+                        st.write(f"**최고온도:** {weather_data['main']['temp_max']:.1f}°C")
+                        st.write(f"**최저온도:** {weather_data['main']['temp_min']:.1f}°C")
+                        st.write(f"**기압:** {weather_data['main']['pressure']} hPa")
+                    
+                    with detail_col2:
+                        st.write(f"**구름량:** {weather_data['clouds']['all']}%")
+                        st.write(f"**가시거리:** {weather_data.get('visibility', 0)/1000:.1f} km")
+                        
+                        # 일출/일몰
+                        sunrise = datetime.fromtimestamp(weather_data['sys']['sunrise'])
+                        sunset = datetime.fromtimestamp(weather_data['sys']['sunset'])
+                        st.write(f"**일출:** {sunrise.strftime('%H:%M')}")
+                        st.write(f"**일몰:** {sunset.strftime('%H:%M')}")
+                
+                # 주간 예보
+                st.divider()
+                forecast_data = get_forecast_by_coordinates(latitude, longitude)
+                if forecast_data:
+                    weekly_data = process_weekly_forecast(forecast_data)
+                    
+                    if weekly_data:
+                        st.subheader("📅 주간 날씨 예보 (7일)")
+                        
+                        # 주간 예보 데이터프레임
+                        weekly_df = pd.DataFrame(weekly_data)
+                        st.dataframe(weekly_df, use_container_width=True)
+                        
+                        # 주간 온도 변화 차트
+                        st.subheader("📊 주간 온도 변화")
+                        
+                        # 온도 데이터 추출
+                        chart_data = []
+                        for item in weekly_data:
+                            max_temp = float(item['최고온도'].replace('°C', ''))
+                            min_temp = float(item['최저온도'].replace('°C', ''))
+                            chart_data.append({
+                                '날짜': item['날짜'],
+                                '최고온도': max_temp,
+                                '최저온도': min_temp
+                            })
+                        
+                        chart_df = pd.DataFrame(chart_data).set_index('날짜')
+                        st.line_chart(chart_df)
+                    
+                    st.divider()  # 구분선 추가
+                    
+                    # 새로운 'OOTD 타임라인' 기능
+                    display_hourly_ootd_timeline(forecast_data)
+                    
+                    st.divider()  # 구분선 추가
+                    
+                    # 2일간 상세 그래프 (기존 기능 유지)
+                    display_forecast(forecast_data)
+            
+            else:
+                st.error("❌ 현재 위치의 날씨 정보를 가져올 수 없습니다.")
+    
+    else:
+        st.markdown("""
+        ### 💡 사용법
+        **현재 위치 기반 날씨 조회:**
+        1. **위도/경도 입력** 후 '🎯 현재 위치 날씨' 클릭
+        2. 또는 **주요 도시 좌표 버튼** 클릭
+        3. **주간 예보** 및 **온도 변화 차트** 확인
+        
+        ### 🗓️ 주간 예보 기능
+        - **7일 날씨 예보**: 일별 최고/최저 온도
+        - **상세 정보**: 날씨, 습도, 풍속, 강수확률
+        - **온도 차트**: 주간 온도 변화 시각화
+        - **2일 상세**: 48시간 온도/습도/풍속 그래프
+        
+        ### 📍 좌표 예시
+        - **김포 사우동**: 37.6199671, 126.726365
+        - **서울**: 37.5665, 126.9780
+        - **부산**: 35.1796, 129.0756  
+        - **제주**: 33.4996, 126.5312
+        """)
+
+def display_current_weather(weather_data):
+    """현재 날씨 정보를 표시하는 함수"""
+    if weather_data:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                label="🌡️ 온도",
+                value=f"{weather_data['main']['temp']:.1f}°C",
+                delta=f"체감온도: {weather_data['main']['feels_like']:.1f}°C"
+            )
+        
+        with col2:
+            st.metric(
+                label="💧 습도",
+                value=f"{weather_data['main']['humidity']}%"
+            )
+        
+        with col3:
+            st.metric(
+                label="👁️ 가시거리",
+                value=f"{weather_data.get('visibility', 0)/1000:.1f}km"
+            )
+        
+        # 추가 정보
+        col4, col5, col6 = st.columns(3)
+        
+        with col4:
+            st.metric(
+                label="🌬️ 풍속",
+                value=f"{weather_data['wind'].get('speed', 0)} m/s"
+            )
+        
+        with col5:
+            st.metric(
+                label="🌡️ 기압",
+                value=f"{weather_data['main']['pressure']} hPa"
+            )
+        
+        with col6:
+            st.metric(
+                label="🌤️ 날씨",
+                value=weather_data['weather'][0]['description']
+            )
+
+def display_forecast(forecast_data):
+    """5일 날씨 예보를 그래프로 표시하는 함수"""
+    if forecast_data:
+        # --- 그래프로 변경 ---
+        # '시간'을 인덱스로, '온도'를 값으로 하는 새 DataFrame 생성
+        chart_data_list = []
+        for item in forecast_data['list'][:16]:  # 2일치(16*3=48시간) 정도만
+            chart_data_list.append({
+                '시간': datetime.fromtimestamp(item['dt']),
+                '온도': item['main']['temp']
+            })
+
+        chart_df = pd.DataFrame(chart_data_list).set_index('시간')
+
+        st.subheader("🌡️ 2일간 기온 변화")
+        st.line_chart(chart_df)
+        
+        # 추가: 습도와 풍속 그래프
+        st.subheader("� 2일간 습도 및 🌬️ 풍속 변화")
+        
+        # 습도와 풍속 데이터 준비
+        multi_data_list = []
+        for item in forecast_data['list'][:16]:
+            multi_data_list.append({
+                '시간': datetime.fromtimestamp(item['dt']),
+                '습도(%)': item['main']['humidity'],
+                '풍속(m/s)': item['wind'].get('speed', 0)
+            })
+        
+        multi_df = pd.DataFrame(multi_data_list).set_index('시간')
+        st.line_chart(multi_df)
+        
+        # 상세 데이터 표 (접을 수 있는 형태로)
+        with st.expander("📊 상세 예보 데이터 보기"):
+            detail_list = []
+            for item in forecast_data['list'][:16]:
+                date_time = datetime.fromtimestamp(item['dt'])
+                detail_list.append({
+                    '날짜': date_time.strftime('%m-%d'),
+                    '시간': date_time.strftime('%H:%M'),
+                    '온도': f"{item['main']['temp']:.1f}°C",
+                    '날씨': item['weather'][0]['description'],
+                    '습도': f"{item['main']['humidity']}%",
+                    '풍속': f"{item['wind'].get('speed', 0):.1f} m/s"
+                })
+            
+            detail_df = pd.DataFrame(detail_list)
+            st.dataframe(detail_df, use_container_width=True)
+
+def display_hourly_ootd_timeline(forecast_data):
+    """
+    시간대별 OOTD 타임라인을 가로로 표시하는 함수 (개선 버전)
+    """
+    st.subheader("👕 시간대별 '오늘 뭐 입지?' 타임라인")
+
+    # 1. '오늘+내일'의 예보 데이터 필터링 (더 많은 시간대)
+    now = datetime.now()
+    forecasts = []
+    
+    if 'list' not in forecast_data:
+        st.warning("시간대별 예보 데이터를 불러올 수 없습니다.")
+        return
+
+    for item in forecast_data['list'][:12]:  # 36시간 (12개 시간대)
+        item_time = datetime.fromtimestamp(item['dt'])
+        # 현재 시간 이후의 예보만 선택
+        if item_time >= now:
+            forecasts.append(item)
+    
+    if not forecasts:
+        st.info("시간대별 예보 정보가 없습니다.")
+        return
+
+    # 2. 가로 타임라인 생성 (6개로 줄여서 넓이 확보)
+    cols = st.columns(min(len(forecasts), 6))  # 최대 6개 컬럼으로 줄임
+    
+    prev_rec = None  # 이전 시간대 추천을 저장할 변수
+
+    for i, item in enumerate(forecasts[:6]):  # 최대 6개 시간대만 표시
+        with cols[i]:
+            # 고정 높이 카드 컨테이너
+            st.markdown("""
+            <div style="border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; 
+                        height: 400px; background-color: rgba(255, 255, 255, 0.95); 
+                        box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin: 10px 0;">
+            """, unsafe_allow_html=True)
+            
+            item_time = datetime.fromtimestamp(item['dt'])
+            
+            # 날씨 데이터 추출
+            temp = item['main']['temp']
+            feels_like = item['main']['feels_like']
+            humidity = item['main']['humidity']
+            wind_speed = item['wind'].get('speed', 0)
+            weather_main = item['weather'][0]['main']
+            weather_desc = item['weather'][0]['description']
+            
+            # 현재 시간대의 OOTD 추천 받기
+            current_rec, accessory_rec = get_ootd_recommendation(feels_like, weather_main)
+
+            # (1) 시간 표시 - 고정 높이
+            if item_time.date() == now.date():
+                time_str = f"오늘 {item_time.strftime('%H시')}"
+            else:
+                time_str = f"내일 {item_time.strftime('%H시')}"
+            
+            st.markdown(f"""
+            <div style="text-align: center; font-weight: bold; font-size: 14px; 
+                       margin-bottom: 12px; padding: 8px; height: 35px;
+                       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                       border-radius: 8px; color: white; display: flex; align-items: center; justify-content: center;">
+                {time_str}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # (2) 날씨 정보 - 고정 높이
+            st.markdown(f"""
+            <div style="text-align: center; margin-bottom: 10px; height: 50px; display: flex; flex-direction: column; justify-content: center;">
+                <div style="font-weight: bold; font-size: 16px;">🌡️ {temp:.1f}°C</div>
+                <div style="font-size: 12px; color: #666;">체감 {feels_like:.1f}°C</div>
+                <div style="font-size: 11px; color: #888;">💧 {humidity}% | 💨 {wind_speed:.1f}m/s</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # (3) 변화 감지 및 조언 - 고정 높이
+            advice_html = ""
+            if prev_rec and current_rec['level'] < prev_rec['level']:
+                colder_item = current_rec['items'].split(',')[0].strip()
+                advice_html = f"""
+                <div style="background-color: rgba(255, 193, 7, 0.2); padding: 6px; border-radius: 6px; 
+                           text-align: center; font-size: 11px; font-weight: bold; height: 35px; 
+                           display: flex; align-items: center; justify-content: center; margin-bottom: 8px;">
+                    ➕ {colder_item} 챙기세요!
+                </div>
+                """
+            elif prev_rec and current_rec['level'] > prev_rec['level']:
+                advice_html = f"""
+                <div style="background-color: rgba(144, 202, 249, 0.3); padding: 6px; border-radius: 6px; 
+                           text-align: center; font-size: 11px; font-weight: bold; height: 35px; 
+                           display: flex; align-items: center; justify-content: center; margin-bottom: 8px;">
+                    ☀️ 더워져요. 외투를 벗으세요
+                </div>
+                """
+            else:
+                advice_html = '<div style="height: 43px; margin-bottom: 8px;"></div>'
+            
+            st.markdown(advice_html, unsafe_allow_html=True)
+
+            # (4) 추천 옷차림 상태 - 고정 높이
+            st.markdown(f"""
+            <div style="text-align: center; padding: 8px; height: 35px;
+                       background: rgba(103, 126, 234, 0.1); 
+                       border-radius: 6px; margin-bottom: 10px; 
+                       display: flex; align-items: center; justify-content: center;">
+                <strong style="font-size: 12px;">{current_rec['summary']}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # (5) 추천 의류 - 고정 높이
+            st.markdown(f"""
+            <div style="margin-bottom: 8px; height: 80px; overflow: hidden;">
+                <div style="font-weight: bold; font-size: 12px; margin-bottom: 4px;">👕 추천 의류</div>
+                <div style="font-size: 10px; color: #666; line-height: 1.3;">{current_rec['items']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # (6) 액세서리 조언 - 고정 높이
+            accessory_text = accessory_rec if accessory_rec else "특별한 준비물 없음"
+            st.markdown(f"""
+            <div style="height: 60px; overflow: hidden;">
+                <div style="font-weight: bold; font-size: 12px; margin-bottom: 4px;">🎯 필수 아이템</div>
+                <div style="font-size: 10px; color: #666; line-height: 1.3;">{accessory_text}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 컨테이너 닫기
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # 다음 루프를 위해 현재 추천을 prev_rec에 저장
+            prev_rec = current_rec
+
+def main():
+    """메인 함수"""
+    # 제목
+    st.title("🌤️ 실시간 날씨")
+    
+    # 탭 생성
+    tab1, tab2 = st.tabs(["🔍 도시 검색", "📍 내 위치"])
+    
+    with tab1:
+        # 도시 입력
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            city_input = st.text_input("도시명", placeholder="도시명을 입력하세요 (예: Seoul, Tokyo, London)", label_visibility="collapsed")
+        
+        with col2:
+            search_btn = st.button("🔍 검색", type="primary")
+        
+        # 한국 주요 도시 버튼들
+        st.markdown("**🇰🇷 한국 주요 도시:**")
+        korea_col1, korea_col2, korea_col3, korea_col4 = st.columns(4)
+        
+        with korea_col1:
+            if st.button("�️ 서울", key="seoul"):
+                city_input = "Seoul"
+                search_btn = True
+        with korea_col2:
+            if st.button("✈️ 김포", key="kimpo"):
+                city_input = "Gimpo"
+                search_btn = True
+        with korea_col3:
+            if st.button("🌊 부산", key="busan"):
+                city_input = "Busan"
+                search_btn = True
+        with korea_col4:
+            if st.button("� 제주", key="jeju"):
+                city_input = "Jeju"
+                search_btn = True
+        
+        # 해외 주요 도시 버튼들
+        st.markdown("**🌍 해외 주요 도시:**")
+        world_col1, world_col2, world_col3, world_col4 = st.columns(4)
+        
+        with world_col1:
+            if st.button("🇯🇵 도쿄", key="tokyo"):
+                city_input = "Tokyo"
+                search_btn = True
+        with world_col2:
+            if st.button("🇺🇸 뉴욕", key="newyork"):
+                city_input = "New York"
+                search_btn = True
+        with world_col3:
+            if st.button("🇬🇧 런던", key="london"):
+                city_input = "London"
+                search_btn = True
+        with world_col4:
+            if st.button("🇫🇷 파리", key="paris"):
+                city_input = "Paris"
+                search_btn = True
+        
+        # 도시 검색 결과 표시
+        display_city_weather(search_btn, city_input)
+    
+    with tab2:
+        # 현재 위치 기반 날씨
+        display_location_weather()
+    
+    # 날씨 정보 표시
+    if search_btn and city_input:
+        with st.spinner("날씨 정보 로딩중..."):
+            weather_data = get_weather_data(city_input)
+            
+            if weather_data:
+                # 기본 정보
+                st.success(f"📍 {weather_data['name']}, {weather_data['sys']['country']}")
+                
+                # 현재 날씨 표시
+                st.subheader("🌡️ 현재 날씨")
+                display_current_weather(weather_data)
+                
+                # 상세 정보
+                with st.expander("📊 상세 정보 보기"):
+                    detail_col1, detail_col2 = st.columns(2)
+                    
+                    with detail_col1:
+                        st.write(f"**체감온도:** {weather_data['main']['feels_like']:.1f}°C")
+                        st.write(f"**최고온도:** {weather_data['main']['temp_max']:.1f}°C")
+                        st.write(f"**최저온도:** {weather_data['main']['temp_min']:.1f}°C")
+                        st.write(f"**기압:** {weather_data['main']['pressure']} hPa")
+                    
+                    with detail_col2:
+                        st.write(f"**구름량:** {weather_data['clouds']['all']}%")
+                        st.write(f"**가시거리:** {weather_data.get('visibility', 0)/1000:.1f} km")
+                        
+                        # 일출/일몰
+                        sunrise = datetime.fromtimestamp(weather_data['sys']['sunrise'])
+                        sunset = datetime.fromtimestamp(weather_data['sys']['sunset'])
+                        st.write(f"**일출:** {sunrise.strftime('%H:%M')}")
+                        st.write(f"**일몰:** {sunset.strftime('%H:%M')}")
+                
+                # 예보 그래프
+                forecast_data = get_forecast_data(city_input)
+                if forecast_data:
+                    display_forecast(forecast_data)
+            
+            else:
+                st.error("❌ 날씨 정보를 가져올 수 없습니다. 도시명을 확인해주세요.")
+    
+    # 초기 화면
+    elif not city_input:
+        st.info("👆 위에서 도시명을 입력하거나 인기 도시 버튼을 클릭하세요!")
+        
+        # 사용법 안내
+        st.markdown("""
+        ### 📖 사용법
+        1. 상단 입력창에 **도시명** 입력 (영어)
+        2. **🔍 검색** 버튼 클릭
+        3. 또는 **인기 도시 버튼** 클릭
+        4. **실시간 날씨 정보** 및 **2일간 온도 그래프** 확인! 🌤️
+        
+        ### 🔍 주요 기능
+        - **실시간 날씨**: 현재 온도, 습도, 풍속, 기압 등
+        - **2일 온도 그래프**: 48시간 온도 변화 시각화
+        - **다중 데이터 그래프**: 습도와 풍속 변화
+        - **상세 정보**: 일출/일몰 시간, 체감온도 등
+        
+        **지원 도시:** 전 세계 대부분의 주요 도시 🌍
+        """)
+
+if __name__ == "__main__":
+    main()
