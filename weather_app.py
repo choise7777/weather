@@ -8,24 +8,28 @@ from pathlib import Path
 
 # API 키 보안 로딩
 try:
-    # 먼저 .env 파일에서 환경변수 로딩 시도
-    from dotenv import load_dotenv
-    load_dotenv()
-    API_KEY = os.getenv('OPENWEATHER_API_KEY')
-    
-    # .env 파일이 없으면 config.py에서 로딩
-    if not API_KEY:
-        from config import OPENWEATHER_API_KEY
-        API_KEY = OPENWEATHER_API_KEY
-except (ImportError, ModuleNotFoundError):
+    # Streamlit Secrets에서 API 키 로딩 (우선순위 1)
+    API_KEY = st.secrets["OPENWEATHER_API_KEY"]
+except (KeyError, FileNotFoundError):
     try:
-        # config.py에서 직접 로딩
-        from config import OPENWEATHER_API_KEY
-        API_KEY = OPENWEATHER_API_KEY
+        # .env 파일에서 환경변수 로딩 시도 (우선순위 2)
+        from dotenv import load_dotenv
+        load_dotenv()
+        API_KEY = os.getenv('OPENWEATHER_API_KEY')
+        
+        # .env 파일이 없으면 config.py에서 로딩
+        if not API_KEY:
+            from config import OPENWEATHER_API_KEY
+            API_KEY = OPENWEATHER_API_KEY
     except (ImportError, ModuleNotFoundError):
-        # 마지막 수단으로 하드코딩된 키 사용 (개발용)
-        API_KEY = "14e3fc348b3e11a20c23806f1c3be844"
-        st.warning("⚠️ API 키가 보안 파일에서 로딩되지 않았습니다. config.py 파일을 확인하세요.")
+        try:
+            # config.py에서 직접 로딩 (우선순위 3)
+            from config import OPENWEATHER_API_KEY
+            API_KEY = OPENWEATHER_API_KEY
+        except (ImportError, ModuleNotFoundError):
+            # 마지막 수단으로 하드코딩된 키 사용 (개발용)
+            API_KEY = "14e3fc348b3e11a20c23806f1c3be844"
+            st.warning("⚠️ API 키가 보안 파일에서 로딩되지 않았습니다. secrets.toml 또는 config.py 파일을 확인하세요.")
 
 def get_detailed_address(latitude, longitude):
     """Nominatim API를 사용해 좌표로부터 상세 주소 정보 획득"""
