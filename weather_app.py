@@ -634,7 +634,7 @@ def display_location_weather():
                     
                     st.divider()  # 구분선 추가
                     
-                    # 새로운 'OOTD 타임라인' 기능
+                    # OOTD 타임라인
                     display_hourly_ootd_timeline(forecast_data)
                     
                     st.divider()  # 구분선 추가
@@ -759,6 +759,8 @@ def display_forecast(forecast_data):
             
             detail_df = pd.DataFrame(detail_list)
             st.dataframe(detail_df, use_container_width=True)
+
+
 
 def display_hourly_ootd_timeline(forecast_data):
     """
